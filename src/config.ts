@@ -13,7 +13,7 @@ export const configSchema = z.object({
    * @example "https://www.builder.io/sitemap.xml"
    * @default ""
    */
-  url: z.string(),
+  url: z.string().url(),
   /**
    * Pattern to match against for links on a page to subsequently crawl
    * @example "https://www.builder.io/c/docs/**"
@@ -84,7 +84,16 @@ export const configSchema = z.object({
   /** Optional maximum number tokens to include in the output file
    * @example 5000
    */
-  maxTokens: z.number().int().positive().optional(),
+  maxTokens: z.number().int().positive(),
+  openai: z.object({
+    enabled: z.boolean(),
+    model: z.string(),
+    prompt: z.object({
+      system: z.string(),
+      temperature: z.number(),
+      maxTokens: z.number()
+    })
+  }).optional()
 });
 
 export type Config = z.infer<typeof configSchema>;

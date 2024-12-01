@@ -85,15 +85,19 @@ export const configSchema = z.object({
    * @example 5000
    */
   maxTokens: z.number().int().positive(),
-  openai: z.object({
-    enabled: z.boolean(),
-    model: z.string(),
-    prompt: z.object({
-      system: z.string(),
-      temperature: z.number(),
-      maxTokens: z.number()
+  openai: z
+    .object({
+      enabled: z.boolean(),
+      model: z.string(),
+      prompt: z.object({
+        system: z.string(),
+        temperature: z.number(),
+        maxTokens: z.number(),
+      }),
+      costPerInputToken: z.number().optional(), // Cost per 1M input tokens in USD
+      costPerOutputToken: z.number().optional(), // Cost per 1M output tokens in USD
     })
-  }).optional()
+    .optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;

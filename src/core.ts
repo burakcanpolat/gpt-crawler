@@ -103,12 +103,13 @@ export async function crawl(config: Config) {
           }
 
           const html = await getPageHtml(page, config.selector);
-          
+
           // Process with OpenAI immediately after getting the page content
           let processedHtml = html;
           if (config.openai?.enabled) {
             log.info("Processing page content with OpenAI...");
-            const { result, promptTokens, completionTokens } = await processHtmlWithOpenAI(html, config);
+            const { result, promptTokens, completionTokens } =
+              await processHtmlWithOpenAI(html, config);
             totalPromptTokens += promptTokens;
             totalCompletionTokens += completionTokens;
             processedHtml = result;
@@ -116,10 +117,10 @@ export async function crawl(config: Config) {
 
           // Store processed HTML
           if (request.loadedUrl) {
-            const result = { 
-              title, 
-              url: request.loadedUrl, 
-              html: processedHtml 
+            const result = {
+              title,
+              url: request.loadedUrl,
+              html: processedHtml,
             };
             crawlResults.push(result);
             await pushData(result);
@@ -203,89 +204,90 @@ export async function write(config: Config) {
   // Combine all the results
   const combined = results.flat();
   console.log("Combined results:", combined);
-  
+
   // Calculate costs using config values
-  const promptCost = (totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.30); // Use config value or default
-  const completionCost = (totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.60); // Use config value or default
+  const promptCost =
+    (totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3); // Use config value or default
+  const completionCost =
+    (totalCompletionTokens / 1000000) *
+    (config.openai?.costPerOutputToken || 0.6); // Use config value or default
   const totalCost = promptCost + completionCost;
 
   // Format the results in markdown
   const output: string[] = [];
-  
+
   // Add token usage and cost information at the top
   output.push(
     "# Token Usage and Cost Summary\n",
     `Total Prompt Tokens: ${totalPromptTokens.toLocaleString()}`,
     `Total Completion Tokens: ${totalCompletionTokens.toLocaleString()}`,
-    `Total Tokens: ${(totalPromptTokens + totalCompletionTokens).toLocaleString()}\n`,
+    `Total Tokens: ${(
+      totalPromptTokens + totalCompletionTokens
+    ).toLocaleString()}\n`,
     `Estimated Cost:`,
     `- Input Cost: $${promptCost.toFixed(4)}`,
     `- Output Cost: $${completionCost.toFixed(4)}`,
     `- Total Cost: $${totalCost.toFixed(4)}\n`,
-    "---\n"
+    "---\n",
   );
-  
+
   for (const result of combined) {
     if (result.success !== false) {
       // Parse the OpenAI response content if it exists
       let content = result.html;
-      if (typeof content === 'object' && content.content) {
+      if (typeof content === "object" && content.content) {
         content = content.content;
       }
 
       // Split content by newlines and process each line
-      const lines = content.split('\n');
+      const lines = content.split("\n");
       const processedContent: string[] = [];
-      
+
       for (const line of lines) {
         // Skip empty lines
         if (!line.trim()) continue;
-        
+
         // Process each line based on its content
-        if (line.includes('Title:')) processedContent.push(line);
-        else if (line.includes('ID:')) processedContent.push(line);
-        else if (line.includes('Channel Name:')) processedContent.push(line);
-        else if (line.includes('Published At:')) processedContent.push(line);
-        else if (line.includes('Processing Style:')) processedContent.push(line);
-        else if (line.includes('----------------')) processedContent.push(line);
-        else if (line.includes('Summary:')) {
-          processedContent.push('Summary:');
+        if (line.includes("Title:")) processedContent.push(line);
+        else if (line.includes("ID:")) processedContent.push(line);
+        else if (line.includes("Channel Name:")) processedContent.push(line);
+        else if (line.includes("Published At:")) processedContent.push(line);
+        else if (line.includes("Processing Style:"))
+          processedContent.push(line);
+        else if (line.includes("----------------")) processedContent.push(line);
+        else if (line.includes("Summary:")) {
+          processedContent.push("Summary:");
           continue;
-        }
-        else if (line.includes('Tags:')) {
-          processedContent.push('\nTags:');
+        } else if (line.includes("Tags:")) {
+          processedContent.push("\nTags:");
           continue;
-        }
-        else if (line.includes('Key Points:')) {
-          processedContent.push('\nKey Points:');
+        } else if (line.includes("Key Points:")) {
+          processedContent.push("\nKey Points:");
           continue;
-        }
-        else if (line.includes('Formatted Text:')) {
-          processedContent.push('\nFormatted Text:');
+        } else if (line.includes("Formatted Text:")) {
+          processedContent.push("\nFormatted Text:");
           continue;
-        }
-        else if (line.includes('================')) {
-          processedContent.push('\n' + line);
-          processedContent.push('');
-        }
-        else {
+        } else if (line.includes("================")) {
+          processedContent.push("\n" + line);
+          processedContent.push("");
+        } else {
           processedContent.push(line);
         }
       }
-      
-      output.push(processedContent.join('\n'));
+
+      output.push(processedContent.join("\n"));
     } else {
       output.push(
         `Error processing content: ${result.error || "Unknown error"}`,
         "=".repeat(80),
-        ""
+        "",
       );
     }
   }
 
   // Write the formatted output to the specified file
   const outputFileName = config.outputFileName || "output.md";
-  await writeFile(outputFileName, output.join('\n'));
+  await writeFile(outputFileName, output.join("\n"));
   nextFileNameString = outputFileName;
 
   return nextFileNameString;

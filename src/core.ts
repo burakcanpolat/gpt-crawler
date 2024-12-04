@@ -1,5 +1,10 @@
 // For more information, see https://crawlee.dev/
-import { Configuration, PlaywrightCrawler, downloadListOfUrls, log } from "crawlee";
+import {
+  Configuration,
+  PlaywrightCrawler,
+  downloadListOfUrls,
+  log,
+} from "crawlee";
 import { readFile, writeFile } from "fs/promises";
 import { glob } from "glob";
 import { Config, configSchema } from "./config.js";
@@ -15,7 +20,7 @@ let totalPromptTokens = 0;
 let totalCompletionTokens = 0;
 
 // Helper function to add delay
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface CrawlResult {
   title: string;
@@ -132,7 +137,10 @@ export async function crawl(config: Config) {
             currentBatch.push(result);
 
             // If current batch reaches threshold, prepare new batch
-            if (currentBatch.length >= threshold && pageCounter < config.maxPagesToCrawl) {
+            if (
+              currentBatch.length >= threshold &&
+              pageCounter < config.maxPagesToCrawl
+            ) {
               // Add delay before starting new batch if specified
               if (config.batchDelay) {
                 await delay(config.batchDelay);
@@ -156,7 +164,9 @@ export async function crawl(config: Config) {
                 ? [config.exclude]
                 : config.exclude ?? [],
           }).then((result) => {
-            log.info(`Found and enqueued ${result.processedRequests.length} new URLs to crawl`);
+            log.info(
+              `Found and enqueued ${result.processedRequests.length} new URLs to crawl`,
+            );
           });
         },
         maxRequestsPerCrawl: config.maxPagesToCrawl,
@@ -244,11 +254,24 @@ export async function write(config: Config) {
         "# Token Usage and Cost Summary\n",
         `Total Prompt Tokens: ${totalPromptTokens.toLocaleString()}`,
         `Total Completion Tokens: ${totalCompletionTokens.toLocaleString()}`,
-        `Total Tokens: ${(totalPromptTokens + totalCompletionTokens).toLocaleString()}\n`,
+        `Total Tokens: ${(
+          totalPromptTokens + totalCompletionTokens
+        ).toLocaleString()}\n`,
         `Estimated Cost:`,
-        `- Input Cost: $${((totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3)).toFixed(4)}`,
-        `- Output Cost: $${((totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.6)).toFixed(4)}`,
-        `- Total Cost: $${((totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3) + (totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.6)).toFixed(4)}\n`,
+        `- Input Cost: $${(
+          (totalPromptTokens / 1000000) *
+          (config.openai?.costPerInputToken || 0.3)
+        ).toFixed(4)}`,
+        `- Output Cost: $${(
+          (totalCompletionTokens / 1000000) *
+          (config.openai?.costPerOutputToken || 0.6)
+        ).toFixed(4)}`,
+        `- Total Cost: $${(
+          (totalPromptTokens / 1000000) *
+            (config.openai?.costPerInputToken || 0.3) +
+          (totalCompletionTokens / 1000000) *
+            (config.openai?.costPerOutputToken || 0.6)
+        ).toFixed(4)}\n`,
         "---\n",
       );
     }
@@ -270,8 +293,10 @@ export async function write(config: Config) {
           else if (line.includes("ID:")) processedContent.push(line);
           else if (line.includes("Channel Name:")) processedContent.push(line);
           else if (line.includes("Published At:")) processedContent.push(line);
-          else if (line.includes("Processing Style:")) processedContent.push(line);
-          else if (line.includes("----------------")) processedContent.push(line);
+          else if (line.includes("Processing Style:"))
+            processedContent.push(line);
+          else if (line.includes("----------------"))
+            processedContent.push(line);
           else if (line.includes("Summary:")) {
             processedContent.push("Summary:");
             continue;
@@ -304,9 +329,12 @@ export async function write(config: Config) {
 
     // Generate output filename for this batch
     const baseFileName = config.outputFileName || "output.md";
-    const extension = baseFileName.split('.').pop();
-    const fileName = baseFileName.replace(`.${extension}`, `_${i + 1}.${extension}`);
-    
+    const extension = baseFileName.split(".").pop();
+    const fileName = baseFileName.replace(
+      `.${extension}`,
+      `_${i + 1}.${extension}`,
+    );
+
     await writeFile(fileName, output.join("\n"));
     writtenFiles.push(fileName);
   }

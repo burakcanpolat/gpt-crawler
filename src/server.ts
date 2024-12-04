@@ -27,12 +27,12 @@ app.post("/crawl", async (req, res) => {
     const crawler = new GPTCrawlerCore(validatedConfig);
     await crawler.crawl();
     const outputFileNames = await crawler.write();
-    
+
     // Read all output files and combine their content
     const outputContents = await Promise.all(
-      outputFileNames.map(fileName => readFile(fileName, "utf-8"))
+      outputFileNames.map((fileName) => readFile(fileName, "utf-8")),
     );
-    
+
     res.contentType("application/json");
     return res.send(outputContents.join("\n\n"));
   } catch (error) {

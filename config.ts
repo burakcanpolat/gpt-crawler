@@ -3,7 +3,7 @@ import { Config } from "./src/config";
 export const defaultConfig: Config = {
   url: "https://www.builder.io/c/docs/developers",
   match: "https://www.builder.io/c/docs/**",
-  maxPagesToCrawl: 999999,  // Pratik olarak sınırsız
+  maxPagesToCrawl: 999999, // Pratik olarak sınırsız
   pagesPerFile: 5,
   batchDelay: 2000, // 2 seconds delay between batches
   outputFileName: "output.md",

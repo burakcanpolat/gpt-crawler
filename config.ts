@@ -3,11 +3,13 @@ import { Config } from "./src/config";
 export const defaultConfig: Config = {
   url: "https://www.builder.io/c/docs/developers",
   match: "https://www.builder.io/c/docs/**",
-  maxPagesToCrawl: 3,
+  maxPagesToCrawl: 999999,  // Pratik olarak sınırsız
+  pagesPerFile: 5,
+  batchDelay: 2000, // 2 seconds delay between batches
   outputFileName: "output.md",
   maxTokens: 2000000,
   openai: {
-    enabled: true,
+    enabled: false,
     model: "gpt-4o-mini-2024-07-18",
     prompt: {
       system:

@@ -1,5 +1,5 @@
 // For more information, see https://crawlee.dev/
-import { Configuration, PlaywrightCrawler, downloadListOfUrls } from "crawlee";
+import { Configuration, PlaywrightCrawler, downloadListOfUrls, log } from "crawlee";
 import { readFile, writeFile } from "fs/promises";
 import { glob } from "glob";
 import { Config, configSchema } from "./config.js";
@@ -7,12 +7,15 @@ import { Page } from "playwright";
 import { isWithinTokenLimit } from "gpt-tokenizer";
 import { PathLike } from "fs";
 import { processHtmlWithOpenAI } from "./openai.js";
-import { clearConfigCache } from "prettier";
 
 let pageCounter = 0;
+let batchCounter = 0;
 let crawler: PlaywrightCrawler;
 let totalPromptTokens = 0;
 let totalCompletionTokens = 0;
+
+// Helper function to add delay
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 interface CrawlResult {
   title: string;
@@ -76,7 +79,8 @@ export async function waitForXPath(page: Page, xpath: string, timeout: number) {
 export async function crawl(config: Config) {
   configSchema.parse(config);
 
-  const crawlResults: CrawlResult[] = [];
+  const threshold = config.pagesPerFile || 2; // Default threshold of 2 pages per file
+  const crawlResults: CrawlResult[][] = [[]]; // Array of batches, starting with first empty batch
 
   if (process.env.NO_CRAWL !== "true") {
     crawler = new PlaywrightCrawler(
@@ -122,7 +126,21 @@ export async function crawl(config: Config) {
               url: request.loadedUrl,
               html: processedHtml,
             };
-            crawlResults.push(result);
+
+            // Get current batch
+            const currentBatch = crawlResults[batchCounter];
+            currentBatch.push(result);
+
+            // If current batch reaches threshold, prepare new batch
+            if (currentBatch.length >= threshold && pageCounter < config.maxPagesToCrawl) {
+              // Add delay before starting new batch if specified
+              if (config.batchDelay) {
+                await delay(config.batchDelay);
+              }
+              batchCounter++;
+              crawlResults.push([]);
+            }
+
             await pushData(result);
           }
 
@@ -137,6 +155,8 @@ export async function crawl(config: Config) {
               typeof config.exclude === "string"
                 ? [config.exclude]
                 : config.exclude ?? [],
+          }).then((result) => {
+            log.info(`Found and enqueued ${result.processedRequests.length} new URLs to crawl`);
           });
         },
         maxRequestsPerCrawl: config.maxPagesToCrawl,
@@ -177,6 +197,7 @@ export async function crawl(config: Config) {
 
     if (isUrlASitemap) {
       const listOfUrls = await downloadListOfUrls({ url: config.url });
+      log.info(`Downloading ${listOfUrls.length} URLs from sitemap...`);
       await crawler.addRequests(listOfUrls);
     } else {
       await crawler.addRequests([config.url]);
@@ -189,7 +210,6 @@ export async function crawl(config: Config) {
 }
 
 export async function write(config: Config) {
-  let nextFileNameString: PathLike = "";
   const jsonFiles = await glob("storage/datasets/default/*.json", {
     absolute: true,
   });
@@ -201,96 +221,97 @@ export async function write(config: Config) {
     results.push(json);
   }
 
-  // Combine all the results
+  // Combine all the results and split into batches
   const combined = results.flat();
-  console.log("Combined results:", combined);
+  const threshold = config.pagesPerFile || 2;
+  const batches: any[][] = [];
 
-  // Calculate costs using config values
-  const promptCost =
-    (totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3); // Use config value or default
-  const completionCost =
-    (totalCompletionTokens / 1000000) *
-    (config.openai?.costPerOutputToken || 0.6); // Use config value or default
-  const totalCost = promptCost + completionCost;
-
-  // Format the results in markdown
-  const output: string[] = [];
-
-  // Add token usage and cost information at the top
-  output.push(
-    "# Token Usage and Cost Summary\n",
-    `Total Prompt Tokens: ${totalPromptTokens.toLocaleString()}`,
-    `Total Completion Tokens: ${totalCompletionTokens.toLocaleString()}`,
-    `Total Tokens: ${(
-      totalPromptTokens + totalCompletionTokens
-    ).toLocaleString()}\n`,
-    `Estimated Cost:`,
-    `- Input Cost: $${promptCost.toFixed(4)}`,
-    `- Output Cost: $${completionCost.toFixed(4)}`,
-    `- Total Cost: $${totalCost.toFixed(4)}\n`,
-    "---\n",
-  );
-
-  for (const result of combined) {
-    if (result.success !== false) {
-      // Parse the OpenAI response content if it exists
-      let content = result.html;
-      if (typeof content === "object" && content.content) {
-        content = content.content;
-      }
-
-      // Split content by newlines and process each line
-      const lines = content.split("\n");
-      const processedContent: string[] = [];
-
-      for (const line of lines) {
-        // Skip empty lines
-        if (!line.trim()) continue;
-
-        // Process each line based on its content
-        if (line.includes("Title:")) processedContent.push(line);
-        else if (line.includes("ID:")) processedContent.push(line);
-        else if (line.includes("Channel Name:")) processedContent.push(line);
-        else if (line.includes("Published At:")) processedContent.push(line);
-        else if (line.includes("Processing Style:"))
-          processedContent.push(line);
-        else if (line.includes("----------------")) processedContent.push(line);
-        else if (line.includes("Summary:")) {
-          processedContent.push("Summary:");
-          continue;
-        } else if (line.includes("Tags:")) {
-          processedContent.push("\nTags:");
-          continue;
-        } else if (line.includes("Key Points:")) {
-          processedContent.push("\nKey Points:");
-          continue;
-        } else if (line.includes("Formatted Text:")) {
-          processedContent.push("\nFormatted Text:");
-          continue;
-        } else if (line.includes("================")) {
-          processedContent.push("\n" + line);
-          processedContent.push("");
-        } else {
-          processedContent.push(line);
-        }
-      }
-
-      output.push(processedContent.join("\n"));
-    } else {
-      output.push(
-        `Error processing content: ${result.error || "Unknown error"}`,
-        "=".repeat(80),
-        "",
-      );
-    }
+  for (let i = 0; i < combined.length; i += threshold) {
+    batches.push(combined.slice(i, i + threshold));
   }
 
-  // Write the formatted output to the specified file
-  const outputFileName = config.outputFileName || "output.md";
-  await writeFile(outputFileName, output.join("\n"));
-  nextFileNameString = outputFileName;
+  const writtenFiles: string[] = [];
 
-  return nextFileNameString;
+  // Process each batch separately
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const output: string[] = [];
+
+    // Add token usage and cost information at the top of each file
+    // write the token usage and cost information for first batch
+    if (i === 0) {
+      output.push(
+        "# Token Usage and Cost Summary\n",
+        `Total Prompt Tokens: ${totalPromptTokens.toLocaleString()}`,
+        `Total Completion Tokens: ${totalCompletionTokens.toLocaleString()}`,
+        `Total Tokens: ${(totalPromptTokens + totalCompletionTokens).toLocaleString()}\n`,
+        `Estimated Cost:`,
+        `- Input Cost: $${((totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3)).toFixed(4)}`,
+        `- Output Cost: $${((totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.6)).toFixed(4)}`,
+        `- Total Cost: $${((totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3) + (totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.6)).toFixed(4)}\n`,
+        "---\n",
+      );
+    }
+
+    // Process each result
+    for (const result of batch) {
+      if (result.success !== false) {
+        let content = result.html;
+        if (typeof content === "object" && content.content) {
+          content = content.content;
+        }
+
+        const lines = content.split("\n");
+        const processedContent: string[] = [];
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          if (line.includes("Title:")) processedContent.push(line);
+          else if (line.includes("ID:")) processedContent.push(line);
+          else if (line.includes("Channel Name:")) processedContent.push(line);
+          else if (line.includes("Published At:")) processedContent.push(line);
+          else if (line.includes("Processing Style:")) processedContent.push(line);
+          else if (line.includes("----------------")) processedContent.push(line);
+          else if (line.includes("Summary:")) {
+            processedContent.push("Summary:");
+            continue;
+          } else if (line.includes("Tags:")) {
+            processedContent.push("\nTags:");
+            continue;
+          } else if (line.includes("Key Points:")) {
+            processedContent.push("\nKey Points:");
+            continue;
+          } else if (line.includes("Formatted Text:")) {
+            processedContent.push("\nFormatted Text:");
+            continue;
+          } else if (line.includes("================")) {
+            processedContent.push("\n" + line);
+            processedContent.push("");
+          } else {
+            processedContent.push(line);
+          }
+        }
+
+        output.push(processedContent.join("\n"));
+      } else {
+        output.push(
+          `Error processing content: ${result.error || "Unknown error"}`,
+          "=".repeat(80),
+          "",
+        );
+      }
+    }
+
+    // Generate output filename for this batch
+    const baseFileName = config.outputFileName || "output.md";
+    const extension = baseFileName.split('.').pop();
+    const fileName = baseFileName.replace(`.${extension}`, `_${i + 1}.${extension}`);
+    
+    await writeFile(fileName, output.join("\n"));
+    writtenFiles.push(fileName);
+  }
+
+  return writtenFiles;
 }
 
 class GPTCrawlerCore {
@@ -304,12 +325,12 @@ class GPTCrawlerCore {
     await crawl(this.config);
   }
 
-  async write(): Promise<PathLike> {
+  async write(): Promise<PathLike[]> {
     // we need to wait for the file path as the path can change
     return new Promise((resolve, reject) => {
       write(this.config)
-        .then((outputFilePath) => {
-          resolve(outputFilePath);
+        .then((outputFilePaths) => {
+          resolve(outputFilePaths);
         })
         .catch(reject);
     });

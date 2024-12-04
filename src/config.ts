@@ -85,6 +85,16 @@ export const configSchema = z.object({
    * @example 5000
    */
   maxTokens: z.number().int().positive(),
+  /**
+   * Number of pages to include in each output file
+   * @default 2
+   */
+  pagesPerFile: z.number().int().positive().optional(),
+  /**
+   * Delay between processing batches in milliseconds
+   * @default 1000
+   */
+  batchDelay: z.number().int().nonnegative().optional(),
   openai: z
     .object({
       enabled: z.boolean(),

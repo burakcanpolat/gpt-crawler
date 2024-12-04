@@ -26,10 +26,15 @@ app.post("/crawl", async (req, res) => {
     const validatedConfig = configSchema.parse(config);
     const crawler = new GPTCrawlerCore(validatedConfig);
     await crawler.crawl();
-    const outputFileName: PathLike = await crawler.write();
-    const outputFileContent = await readFile(outputFileName, "utf-8");
+    const outputFileNames = await crawler.write();
+    
+    // Read all output files and combine their content
+    const outputContents = await Promise.all(
+      outputFileNames.map(fileName => readFile(fileName, "utf-8"))
+    );
+    
     res.contentType("application/json");
-    return res.send(outputFileContent);
+    return res.send(outputContents.join("\n\n"));
   } catch (error) {
     return res
       .status(500)

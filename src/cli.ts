@@ -18,7 +18,7 @@ const messages = {
   maxTokens: "What is the maximum number of tokens to generate?",
 };
 
-interface CLIOptions extends Omit<Config, 'maxPagesToCrawl' | 'maxTokens'> {
+interface CLIOptions extends Omit<Config, "maxPagesToCrawl" | "maxTokens"> {
   maxPagesToCrawl: string;
   maxTokens: string;
 }
@@ -50,7 +50,8 @@ async function handler(options: CLIOptions) {
         enabled: true,
         model: "gpt-4o-mini-2024-07-18",
         prompt: {
-          system: "You are a helpful assistant that processes HTML content. Extract the main content and structure it in a clean, readable format. Remove navigation elements, headers, and other unnecessary UI elements. Return only the main content in a clear, structured format.",
+          system:
+            "You are a helpful assistant that processes HTML content. Extract the main content and structure it in a clean, readable format. Remove navigation elements, headers, and other unnecessary UI elements. Return only the main content in a clear, structured format.",
           temperature: 0.3,
           maxTokens: 1000,
         },
@@ -112,16 +113,28 @@ program
   .option(
     "--openai-enabled <boolean>",
     "Enable or disable OpenAI integration",
-    "true"
+    "true",
   )
-  .option("--openai-model <string>", "OpenAI model to use", "gpt-4o-mini-2024-07-18")
+  .option(
+    "--openai-model <string>",
+    "OpenAI model to use",
+    "gpt-4o-mini-2024-07-18",
+  )
   .option(
     "--openai-prompt-system <string>",
     "OpenAI prompt system message",
-    "You are a helpful assistant that processes HTML content. Extract the main content and structure it in a clean, readable format. Remove navigation elements, headers, and other unnecessary UI elements. Return only the main content in a clear, structured format."
+    "You are a helpful assistant that processes HTML content. Extract the main content and structure it in a clean, readable format. Remove navigation elements, headers, and other unnecessary UI elements. Return only the main content in a clear, structured format.",
   )
-  .option("--openai-prompt-temperature <number>", "OpenAI prompt temperature", "0.3")
-  .option("--openai-prompt-maxTokens <number>", "OpenAI prompt max tokens", "1000")
+  .option(
+    "--openai-prompt-temperature <number>",
+    "OpenAI prompt temperature",
+    "0.3",
+  )
+  .option(
+    "--openai-prompt-maxTokens <number>",
+    "OpenAI prompt max tokens",
+    "1000",
+  )
   .action(handler);
 
 program.parse();

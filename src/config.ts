@@ -85,15 +85,29 @@ export const configSchema = z.object({
    * @example 5000
    */
   maxTokens: z.number().int().positive(),
-  openai: z.object({
-    enabled: z.boolean(),
-    model: z.string(),
-    prompt: z.object({
-      system: z.string(),
-      temperature: z.number(),
-      maxTokens: z.number()
+  /**
+   * Number of pages to include in each output file
+   * @default 2
+   */
+  pagesPerFile: z.number().int().positive().optional(),
+  /**
+   * Delay between processing batches in milliseconds
+   * @default 1000
+   */
+  batchDelay: z.number().int().nonnegative().optional(),
+  openai: z
+    .object({
+      enabled: z.boolean(),
+      model: z.string(),
+      prompt: z.object({
+        system: z.string(),
+        temperature: z.number(),
+        maxTokens: z.number(),
+      }),
+      costPerInputToken: z.number().optional(), // Cost per 1M input tokens in USD
+      costPerOutputToken: z.number().optional(), // Cost per 1M output tokens in USD
     })
-  }).optional()
+    .optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;

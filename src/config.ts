@@ -86,6 +86,11 @@ export const configSchema = z.object({
    */
   maxTokens: z.number().int().positive(),
   /**
+   * Maximum number of concurrent requests
+   * @default 10
+   */
+  maxConcurrency: z.number().int().positive().optional(),
+  /**
    * Number of pages to include in each output file
    * @default 2
    */

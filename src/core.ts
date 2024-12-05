@@ -1,9 +1,10 @@
 // For more information, see https://crawlee.dev/
 import {
-  Configuration,
   PlaywrightCrawler,
   downloadListOfUrls,
   log,
+  PlaywrightCrawlingContext,
+  Dictionary,
 } from "crawlee";
 import { readFile, writeFile } from "fs/promises";
 import { glob } from "glob";
@@ -12,6 +13,8 @@ import { Page } from "playwright";
 import { isWithinTokenLimit } from "gpt-tokenizer";
 import { PathLike } from "fs";
 import { processHtmlWithOpenAI } from "./openai.js";
+import { mkdir } from "fs/promises";
+import { join } from "path";
 
 let pageCounter = 0;
 let batchCounter = 0;
@@ -88,127 +91,157 @@ export async function crawl(config: Config) {
   const crawlResults: CrawlResult[][] = [[]]; // Array of batches, starting with first empty batch
 
   if (process.env.NO_CRAWL !== "true") {
-    crawler = new PlaywrightCrawler(
-      {
-        async requestHandler({ request, page, enqueueLinks, log, pushData }) {
-          const title = await page.title();
-          pageCounter++;
+    // Ensure storage directories exist
+    try {
+      await mkdir(join(process.cwd(), "storage", "request_queues", "default"), { recursive: true });
+      await mkdir(join(process.cwd(), "storage", "datasets", "default"), { recursive: true });
+    } catch (error) {
+      // Ignore if directories already exist
+    }
+
+    crawler = new PlaywrightCrawler({
+      async requestHandler({ request, page, enqueueLinks, log, pushData }: PlaywrightCrawlingContext): Promise<void> {
+        const title = await page.title();
+        pageCounter++;
+        log.info(
+          `Crawling: Page ${pageCounter} / ${config.maxPagesToCrawl} - URL: ${request.loadedUrl}...`,
+        );
+
+        if (config.selector) {
+          if (config.selector.startsWith("/")) {
+            await waitForXPath(
+              page,
+              config.selector,
+              config.waitForSelectorTimeout ?? 1000,
+            );
+          } else {
+            await page.waitForSelector(config.selector, {
+              timeout: config.waitForSelectorTimeout ?? 1000,
+            });
+          }
+        }
+
+        const html = await getPageHtml(page, config.selector);
+
+        // Process with OpenAI immediately after getting the page content
+        let processedHtml = html;
+        if (config.openai?.enabled) {
+          log.info("Processing page content with OpenAI...");
+          const { result, promptTokens, completionTokens } =
+            await processHtmlWithOpenAI(html, config);
+          totalPromptTokens += promptTokens;
+          totalCompletionTokens += completionTokens;
+          processedHtml = result;
+        }
+
+        // Store processed HTML
+        if (request.loadedUrl) {
+          const result = {
+            title,
+            url: request.loadedUrl,
+            html: processedHtml,
+          };
+
+          // Get current batch
+          const currentBatch = crawlResults[batchCounter];
+          currentBatch.push(result);
+
+          // If current batch reaches threshold, prepare new batch
+          if (
+            currentBatch.length >= threshold &&
+            pageCounter < config.maxPagesToCrawl
+          ) {
+            // Add delay before starting new batch if specified
+            if (config.batchDelay) {
+              await delay(config.batchDelay);
+            }
+            batchCounter++;
+            crawlResults.push([]);
+          }
+
+          await pushData(result);
+        }
+
+        if (config.onVisitPage) {
+          await config.onVisitPage({ page, pushData });
+        }
+
+        await enqueueLinks({
+          globs:
+            typeof config.match === "string" ? [config.match] : config.match,
+          exclude:
+            typeof config.exclude === "string"
+              ? [config.exclude]
+              : config.exclude ?? [],
+        }).then((result) => {
           log.info(
-            `Crawling: Page ${pageCounter} / ${config.maxPagesToCrawl} - URL: ${request.loadedUrl}...`,
+            `Found and enqueued ${result.processedRequests.length} new URLs to crawl`,
           );
-
-          if (config.selector) {
-            if (config.selector.startsWith("/")) {
-              await waitForXPath(
-                page,
-                config.selector,
-                config.waitForSelectorTimeout ?? 1000,
-              );
-            } else {
-              await page.waitForSelector(config.selector, {
-                timeout: config.waitForSelectorTimeout ?? 1000,
-              });
-            }
-          }
-
-          const html = await getPageHtml(page, config.selector);
-
-          // Process with OpenAI immediately after getting the page content
-          let processedHtml = html;
-          if (config.openai?.enabled) {
-            log.info("Processing page content with OpenAI...");
-            const { result, promptTokens, completionTokens } =
-              await processHtmlWithOpenAI(html, config);
-            totalPromptTokens += promptTokens;
-            totalCompletionTokens += completionTokens;
-            processedHtml = result;
-          }
-
-          // Store processed HTML
-          if (request.loadedUrl) {
-            const result = {
-              title,
-              url: request.loadedUrl,
-              html: processedHtml,
-            };
-
-            // Get current batch
-            const currentBatch = crawlResults[batchCounter];
-            currentBatch.push(result);
-
-            // If current batch reaches threshold, prepare new batch
-            if (
-              currentBatch.length >= threshold &&
-              pageCounter < config.maxPagesToCrawl
-            ) {
-              // Add delay before starting new batch if specified
-              if (config.batchDelay) {
-                await delay(config.batchDelay);
-              }
-              batchCounter++;
-              crawlResults.push([]);
-            }
-
-            await pushData(result);
-          }
-
-          if (config.onVisitPage) {
-            await config.onVisitPage({ page, pushData });
-          }
-
-          await enqueueLinks({
-            globs:
-              typeof config.match === "string" ? [config.match] : config.match,
-            exclude:
-              typeof config.exclude === "string"
-                ? [config.exclude]
-                : config.exclude ?? [],
-          }).then((result) => {
-            log.info(
-              `Found and enqueued ${result.processedRequests.length} new URLs to crawl`,
-            );
-          });
-        },
-        maxRequestsPerCrawl: config.maxPagesToCrawl,
-        preNavigationHooks: [
-          async ({ request, page, log }) => {
-            const RESOURCE_EXCLUSTIONS = config.resourceExclusions ?? [];
-            if (RESOURCE_EXCLUSTIONS.length === 0) {
-              return;
-            }
-            if (config.cookie) {
-              const cookies = (
-                Array.isArray(config.cookie) ? config.cookie : [config.cookie]
-              ).map((cookie) => {
-                return {
-                  name: cookie.name,
-                  value: cookie.value,
-                  url: request.loadedUrl,
-                };
-              });
-              await page.context().addCookies(cookies);
-            }
-            await page.route(
-              `**\/*.{${RESOURCE_EXCLUSTIONS.join()}}`,
-              (route) => route.abort("aborted"),
-            );
-            log.info(
-              `Aborting requests for as this is a resource excluded route`,
-            );
-          },
-        ],
+        });
       },
-      new Configuration({
-        purgeOnStart: true,
-      }),
-    );
+      maxRequestsPerCrawl: config.maxPagesToCrawl,
+      maxConcurrency: config.maxConcurrency || 2,
+      preNavigationHooks: [
+        async ({ request, page, log }) => {
+          const RESOURCE_EXCLUSTIONS = config.resourceExclusions ?? [];
+          if (RESOURCE_EXCLUSTIONS.length === 0) {
+            return;
+          }
+          if (config.cookie) {
+            const cookies = (
+              Array.isArray(config.cookie) ? config.cookie : [config.cookie]
+            ).map((cookie) => {
+              return {
+                name: cookie.name,
+                value: cookie.value,
+                url: request.loadedUrl,
+              };
+            });
+            await page.context().addCookies(cookies);
+          }
+          await page.route(
+            `**\/*.{${RESOURCE_EXCLUSTIONS.join()}}`,
+            (route) => route.abort("aborted"),
+          );
+          log.info(
+            `Aborting requests for as this is a resource excluded route`,
+          );
+        },
+      ],
+    });
+
+    // Clear storage before starting
+    await crawler.getRequestQueue();
 
     const isUrlASitemap = /sitemap.*\.xml$/.test(config.url);
 
     if (isUrlASitemap) {
       const listOfUrls = await downloadListOfUrls({ url: config.url });
-      log.info(`Downloading ${listOfUrls.length} URLs from sitemap...`);
-      await crawler.addRequests(listOfUrls);
+      log.info(`Found ${listOfUrls.length} URLs in sitemap...`);
+
+      // Convert patterns to arrays
+      const matchPatterns = Array.isArray(config.match) ? config.match : [config.match];
+      const excludePatterns = config.exclude 
+        ? (Array.isArray(config.exclude) ? config.exclude : [config.exclude]) 
+        : [];
+
+      // Filter URLs based on match and exclude patterns
+      const filteredUrls = listOfUrls.filter(url => {
+        // Check if URL matches any of the match patterns
+        const matchesPattern = matchPatterns.some(pattern => 
+          new RegExp(pattern.replace(/\*\*/g, '.*')).test(url)
+        );
+
+        // Check if URL matches any of the exclude patterns
+        const isExcluded = excludePatterns.length > 0 && excludePatterns.some(pattern => 
+          pattern && new RegExp(pattern.replace(/\*\*/g, '.*')).test(url)
+        );
+
+        return matchesPattern && !isExcluded;
+      });
+
+      log.info(`Filtered to ${filteredUrls.length} URLs after applying patterns`);
+      await crawler.addRequests(filteredUrls);
     } else {
       await crawler.addRequests([config.url]);
     }

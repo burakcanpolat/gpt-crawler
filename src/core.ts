@@ -87,8 +87,8 @@ export async function waitForXPath(page: Page, xpath: string, timeout: number) {
 export async function crawl(config: Config) {
   configSchema.parse(config);
 
-  const threshold = config.pagesPerFile || 2; // Default threshold of 2 pages per file
-  const crawlResults: CrawlResult[][] = [[]]; // Array of batches, starting with first empty batch
+  const threshold = config.pagesPerFile || 5;
+  const crawlResults: CrawlResult[][] = [[]];
 
   if (process.env.NO_CRAWL !== "true") {
     // Ensure storage directories exist
@@ -100,8 +100,16 @@ export async function crawl(config: Config) {
     }
 
     crawler = new PlaywrightCrawler({
-      async requestHandler({ request, page, enqueueLinks, log, pushData }: PlaywrightCrawlingContext): Promise<void> {
-        const title = await page.title();
+      async requestHandler({ request, page, enqueueLinks, log, pushData, crawler }: PlaywrightCrawlingContext): Promise<void> {
+        // Early check for page limit
+        if (pageCounter >= config.maxPagesToCrawl) {
+          log.info('Reached maximum page limit. Stopping crawler...');
+          if (crawler.autoscaledPool) {
+            await crawler.autoscaledPool.abort();
+          }
+          return;
+        }
+
         pageCounter++;
         log.info(
           `Crawling: Page ${pageCounter} / ${config.maxPagesToCrawl} - URL: ${request.loadedUrl}...`,
@@ -137,7 +145,7 @@ export async function crawl(config: Config) {
         // Store processed HTML
         if (request.loadedUrl) {
           const result = {
-            title,
+            title: await page.title(),
             url: request.loadedUrl,
             html: processedHtml,
           };
@@ -166,21 +174,19 @@ export async function crawl(config: Config) {
           await config.onVisitPage({ page, pushData });
         }
 
-        await enqueueLinks({
-          globs:
-            typeof config.match === "string" ? [config.match] : config.match,
-          exclude:
-            typeof config.exclude === "string"
-              ? [config.exclude]
-              : config.exclude ?? [],
-        }).then((result) => {
-          log.info(
-            `Found and enqueued ${result.processedRequests.length} new URLs to crawl`,
-          );
-        });
+        // Only enqueue new links if we haven't reached the limit
+        if (pageCounter < config.maxPagesToCrawl) {
+          await enqueueLinks({
+            globs: typeof config.match === "string" ? [config.match] : config.match,
+            exclude: typeof config.exclude === "string" ? [config.exclude] : config.exclude ?? [],
+          }).then((result) => {
+            log.info(
+              `Found and enqueued ${result.processedRequests.length} new URLs to crawl`,
+            );
+          });
+        }
       },
-      maxRequestsPerCrawl: config.maxPagesToCrawl,
-      maxConcurrency: config.maxConcurrency || 2,
+      maxConcurrency: config.maxConcurrency || 8,
       preNavigationHooks: [
         async ({ request, page, log }) => {
           const RESOURCE_EXCLUSTIONS = config.resourceExclusions ?? [];
@@ -219,20 +225,17 @@ export async function crawl(config: Config) {
       const listOfUrls = await downloadListOfUrls({ url: config.url });
       log.info(`Found ${listOfUrls.length} URLs in sitemap...`);
 
-      // Convert patterns to arrays
-      const matchPatterns = Array.isArray(config.match) ? config.match : [config.match];
-      const excludePatterns = config.exclude 
-        ? (Array.isArray(config.exclude) ? config.exclude : [config.exclude]) 
-        : [];
-
       // Filter URLs based on match and exclude patterns
       const filteredUrls = listOfUrls.filter(url => {
-        // Check if URL matches any of the match patterns
+        const matchPatterns = Array.isArray(config.match) ? config.match : [config.match];
+        const excludePatterns = config.exclude 
+          ? (Array.isArray(config.exclude) ? config.exclude : [config.exclude]) 
+          : [];
+
         const matchesPattern = matchPatterns.some(pattern => 
           new RegExp(pattern.replace(/\*\*/g, '.*')).test(url)
         );
 
-        // Check if URL matches any of the exclude patterns
         const isExcluded = excludePatterns.length > 0 && excludePatterns.some(pattern => 
           pattern && new RegExp(pattern.replace(/\*\*/g, '.*')).test(url)
         );
@@ -241,7 +244,12 @@ export async function crawl(config: Config) {
       });
 
       log.info(`Filtered to ${filteredUrls.length} URLs after applying patterns`);
-      await crawler.addRequests(filteredUrls);
+      
+      // Only add URLs up to the maxPagesToCrawl limit
+      const urlsToAdd = filteredUrls.slice(0, config.maxPagesToCrawl);
+      log.info(`Adding ${urlsToAdd.length} URLs to crawler queue (limited by maxPagesToCrawl)...`);
+      
+      await crawler.addRequests(urlsToAdd);
     } else {
       await crawler.addRequests([config.url]);
     }
@@ -252,124 +260,160 @@ export async function crawl(config: Config) {
   return crawlResults;
 }
 
+interface ProcessedBatch {
+  content: string[];
+  error?: string;
+}
+
+async function processResult(result: any): Promise<string> {
+  const processedContent: string[] = [];
+  
+  try {
+    let content = result.html;
+    const lines = content.split("\n");
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      
+      if (line.includes("Title:")) {
+        const title = line.replace("Title:", "").trim();
+        processedContent.push(`# ${title}\n`);
+      }
+      else if (line.includes("ID:")) processedContent.push(line + "\n");
+      else if (line.includes("Channel Name:")) processedContent.push(line + "\n");
+      else if (line.includes("Published At:")) processedContent.push(line + "\n");
+      else if (line.includes("Processing Style:")) processedContent.push(line + "\n\n");
+      else if (line.includes("----------------")) processedContent.push(line + "\n");
+      else if (line.includes("Summary:")) processedContent.push("\n## Summary\n");
+      else if (line.includes("Tags:")) processedContent.push("\n## Tags\n");
+      else if (line.includes("Key Points:")) processedContent.push("\n## Key Points\n");
+      else if (line.includes("Formatted Text:")) processedContent.push("\n## Formatted Text\n");
+      else if (line.includes("================")) processedContent.push("\n" + line + "\n\n");
+      else processedContent.push(line + "\n");
+    }
+
+    return processedContent.join("");
+  } catch (error: any) {
+    console.error("Error processing result:", error);
+    throw new Error(`Failed to process result: ${error.message || 'Unknown error'}`);
+  }
+}
+
+async function processBatch(
+  batch: any[],
+  batchIndex: number,
+  tokenInfo: string[],
+): Promise<ProcessedBatch> {
+  try {
+    const output: string[] = batchIndex === 0 ? [...tokenInfo] : [];
+    
+    for (const item of batch) {
+      if (item.success !== false) {
+        const processedContent = await processResult(item);
+        output.push(processedContent);
+      }
+    }
+
+    return { content: output };
+  } catch (error: any) {
+    return { 
+      content: [], 
+      error: `Error processing batch ${batchIndex}: ${error.message || 'Unknown error'}` 
+    };
+  }
+}
+
 export async function write(config: Config) {
   const jsonFiles = await glob("storage/datasets/default/*.json", {
     absolute: true,
   });
 
-  const results = [];
-  for (const file of jsonFiles) {
-    const content = await readFile(file, "utf-8");
-    const json = JSON.parse(content);
-    results.push(json);
-  }
-
-  // Combine all the results and split into batches
-  const combined = results.flat();
-  const threshold = config.pagesPerFile || 2;
-  const batches: any[][] = [];
-
-  for (let i = 0; i < combined.length; i += threshold) {
-    batches.push(combined.slice(i, i + threshold));
-  }
-
+  const threshold = config.pagesPerFile || 5;
   const writtenFiles: string[] = [];
+  let batchIndex = 0;
 
-  // Process each batch separately
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    const output: string[] = [];
+  // Token bilgilerini hazırla
+  const tokenInfo = [
+    "# Token Usage and Cost Summary\n",
+    `Total Prompt Tokens: ${totalPromptTokens.toLocaleString()}`,
+    `Total Completion Tokens: ${totalCompletionTokens.toLocaleString()}`,
+    `Total Tokens: ${(totalPromptTokens + totalCompletionTokens).toLocaleString()}\n`,
+    `Estimated Cost:`,
+    `- Input Cost: $${((totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3)).toFixed(4)}`,
+    `- Output Cost: $${((totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.6)).toFixed(4)}`,
+    `- Total Cost: $${((totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3) + (totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.6)).toFixed(4)}\n`,
+    "---\n",
+  ];
 
-    // Add token usage and cost information at the top of each file
-    // write the token usage and cost information for first batch
-    if (i === 0) {
-      output.push(
-        "# Token Usage and Cost Summary\n",
-        `Total Prompt Tokens: ${totalPromptTokens.toLocaleString()}`,
-        `Total Completion Tokens: ${totalCompletionTokens.toLocaleString()}`,
-        `Total Tokens: ${(
-          totalPromptTokens + totalCompletionTokens
-        ).toLocaleString()}\n`,
-        `Estimated Cost:`,
-        `- Input Cost: $${(
-          (totalPromptTokens / 1000000) *
-          (config.openai?.costPerInputToken || 0.3)
-        ).toFixed(4)}`,
-        `- Output Cost: $${(
-          (totalCompletionTokens / 1000000) *
-          (config.openai?.costPerOutputToken || 0.6)
-        ).toFixed(4)}`,
-        `- Total Cost: $${(
-          (totalPromptTokens / 1000000) *
-            (config.openai?.costPerInputToken || 0.3) +
-          (totalCompletionTokens / 1000000) *
-            (config.openai?.costPerOutputToken || 0.6)
-        ).toFixed(4)}\n`,
-        "---\n",
-      );
-    }
-
-    // Process each result
-    for (const result of batch) {
-      if (result.success !== false) {
-        let content = result.html;
-        if (typeof content === "object" && content.content) {
-          content = content.content;
+  try {
+    let currentBatch: any[] = [];
+    
+    for (const file of jsonFiles) {
+      const fileContent = await readFile(file, "utf-8");
+      let results;
+      try {
+        results = JSON.parse(fileContent);
+        // Eğer results bir array değilse, array'e çevir
+        if (!Array.isArray(results)) {
+          results = [results];
         }
+      } catch (parseError) {
+        console.error(`Error parsing JSON file ${file}:`, parseError);
+        continue; // Bu dosyayı atla ve diğerine geç
+      }
 
-        const lines = content.split("\n");
-        const processedContent: string[] = [];
+      for (const result of results) {
+        currentBatch.push(result);
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          if (line.includes("Title:")) processedContent.push(line);
-          else if (line.includes("ID:")) processedContent.push(line);
-          else if (line.includes("Channel Name:")) processedContent.push(line);
-          else if (line.includes("Published At:")) processedContent.push(line);
-          else if (line.includes("Processing Style:"))
-            processedContent.push(line);
-          else if (line.includes("----------------"))
-            processedContent.push(line);
-          else if (line.includes("Summary:")) {
-            processedContent.push("Summary:");
-            continue;
-          } else if (line.includes("Tags:")) {
-            processedContent.push("\nTags:");
-            continue;
-          } else if (line.includes("Key Points:")) {
-            processedContent.push("\nKey Points:");
-            continue;
-          } else if (line.includes("Formatted Text:")) {
-            processedContent.push("\nFormatted Text:");
-            continue;
-          } else if (line.includes("================")) {
-            processedContent.push("\n" + line);
-            processedContent.push("");
-          } else {
-            processedContent.push(line);
+        if (currentBatch.length >= threshold) {
+          const { content, error } = await processBatch(currentBatch, batchIndex, tokenInfo);
+          
+          if (error) {
+            console.error(error);
           }
-        }
 
-        output.push(processedContent.join("\n"));
-      } else {
-        output.push(
-          `Error processing content: ${result.error || "Unknown error"}`,
-          "=".repeat(80),
-          "",
-        );
+          if (content.length > 0) {
+            const fileName = config.outputFileName || "output.md";
+            const extension = fileName.split(".").pop();
+            const outputPath = fileName.replace(
+              `.${extension}`,
+              `_${batchIndex + 1}.${extension}`,
+            );
+
+            await writeFile(outputPath, content.join("\n"));
+            writtenFiles.push(outputPath);
+          }
+
+          currentBatch = [];
+          batchIndex++;
+        }
       }
     }
 
-    // Generate output filename for this batch
-    const baseFileName = config.outputFileName || "output.md";
-    const extension = baseFileName.split(".").pop();
-    const fileName = baseFileName.replace(
-      `.${extension}`,
-      `_${i + 1}.${extension}`,
-    );
+    // Kalan batch'i işle
+    if (currentBatch.length > 0) {
+      const { content, error } = await processBatch(currentBatch, batchIndex, tokenInfo);
+      
+      if (error) {
+        console.error(error);
+      }
 
-    await writeFile(fileName, output.join("\n"));
-    writtenFiles.push(fileName);
+      if (content.length > 0) {
+        const fileName = config.outputFileName || "output.md";
+        const extension = fileName.split(".").pop();
+        const outputPath = fileName.replace(
+          `.${extension}`,
+          `_${batchIndex + 1}.${extension}`,
+        );
+
+        await writeFile(outputPath, content.join("\n"));
+        writtenFiles.push(outputPath);
+      }
+    }
+
+  } catch (error) {
+    console.error("Error during file processing:", error);
+    throw error;
   }
 
   return writtenFiles;

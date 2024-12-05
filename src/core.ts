@@ -93,17 +93,28 @@ export async function crawl(config: Config) {
   if (process.env.NO_CRAWL !== "true") {
     // Ensure storage directories exist
     try {
-      await mkdir(join(process.cwd(), "storage", "request_queues", "default"), { recursive: true });
-      await mkdir(join(process.cwd(), "storage", "datasets", "default"), { recursive: true });
+      await mkdir(join(process.cwd(), "storage", "request_queues", "default"), {
+        recursive: true,
+      });
+      await mkdir(join(process.cwd(), "storage", "datasets", "default"), {
+        recursive: true,
+      });
     } catch (error) {
       // Ignore if directories already exist
     }
 
     crawler = new PlaywrightCrawler({
-      async requestHandler({ request, page, enqueueLinks, log, pushData, crawler }: PlaywrightCrawlingContext): Promise<void> {
+      async requestHandler({
+        request,
+        page,
+        enqueueLinks,
+        log,
+        pushData,
+        crawler,
+      }: PlaywrightCrawlingContext): Promise<void> {
         // Early check for page limit
         if (pageCounter >= config.maxPagesToCrawl) {
-          log.info('Reached maximum page limit. Stopping crawler...');
+          log.info("Reached maximum page limit. Stopping crawler...");
           if (crawler.autoscaledPool) {
             await crawler.autoscaledPool.abort();
           }
@@ -177,8 +188,12 @@ export async function crawl(config: Config) {
         // Only enqueue new links if we haven't reached the limit
         if (pageCounter < config.maxPagesToCrawl) {
           await enqueueLinks({
-            globs: typeof config.match === "string" ? [config.match] : config.match,
-            exclude: typeof config.exclude === "string" ? [config.exclude] : config.exclude ?? [],
+            globs:
+              typeof config.match === "string" ? [config.match] : config.match,
+            exclude:
+              typeof config.exclude === "string"
+                ? [config.exclude]
+                : config.exclude ?? [],
           }).then((result) => {
             log.info(
               `Found and enqueued ${result.processedRequests.length} new URLs to crawl`,
@@ -205,9 +220,8 @@ export async function crawl(config: Config) {
             });
             await page.context().addCookies(cookies);
           }
-          await page.route(
-            `**\/*.{${RESOURCE_EXCLUSTIONS.join()}}`,
-            (route) => route.abort("aborted"),
+          await page.route(`**\/*.{${RESOURCE_EXCLUSTIONS.join()}}`, (route) =>
+            route.abort("aborted"),
           );
           log.info(
             `Aborting requests for as this is a resource excluded route`,
@@ -226,29 +240,40 @@ export async function crawl(config: Config) {
       log.info(`Found ${listOfUrls.length} URLs in sitemap...`);
 
       // Filter URLs based on match and exclude patterns
-      const filteredUrls = listOfUrls.filter(url => {
-        const matchPatterns = Array.isArray(config.match) ? config.match : [config.match];
-        const excludePatterns = config.exclude 
-          ? (Array.isArray(config.exclude) ? config.exclude : [config.exclude]) 
+      const filteredUrls = listOfUrls.filter((url) => {
+        const matchPatterns = Array.isArray(config.match)
+          ? config.match
+          : [config.match];
+        const excludePatterns = config.exclude
+          ? Array.isArray(config.exclude)
+            ? config.exclude
+            : [config.exclude]
           : [];
 
-        const matchesPattern = matchPatterns.some(pattern => 
-          new RegExp(pattern.replace(/\*\*/g, '.*')).test(url)
+        const matchesPattern = matchPatterns.some((pattern) =>
+          new RegExp(pattern.replace(/\*\*/g, ".*")).test(url),
         );
 
-        const isExcluded = excludePatterns.length > 0 && excludePatterns.some(pattern => 
-          pattern && new RegExp(pattern.replace(/\*\*/g, '.*')).test(url)
-        );
+        const isExcluded =
+          excludePatterns.length > 0 &&
+          excludePatterns.some(
+            (pattern) =>
+              pattern && new RegExp(pattern.replace(/\*\*/g, ".*")).test(url),
+          );
 
         return matchesPattern && !isExcluded;
       });
 
-      log.info(`Filtered to ${filteredUrls.length} URLs after applying patterns`);
-      
+      log.info(
+        `Filtered to ${filteredUrls.length} URLs after applying patterns`,
+      );
+
       // Only add URLs up to the maxPagesToCrawl limit
       const urlsToAdd = filteredUrls.slice(0, config.maxPagesToCrawl);
-      log.info(`Adding ${urlsToAdd.length} URLs to crawler queue (limited by maxPagesToCrawl)...`);
-      
+      log.info(
+        `Adding ${urlsToAdd.length} URLs to crawler queue (limited by maxPagesToCrawl)...`,
+      );
+
       await crawler.addRequests(urlsToAdd);
     } else {
       await crawler.addRequests([config.url]);
@@ -267,35 +292,44 @@ interface ProcessedBatch {
 
 async function processResult(result: any): Promise<string> {
   const processedContent: string[] = [];
-  
+
   try {
     let content = result.html;
     const lines = content.split("\n");
 
     for (const line of lines) {
       if (!line.trim()) continue;
-      
+
       if (line.includes("Title:")) {
         const title = line.replace("Title:", "").trim();
         processedContent.push(`# ${title}\n`);
-      }
-      else if (line.includes("ID:")) processedContent.push(line + "\n");
-      else if (line.includes("Channel Name:")) processedContent.push(line + "\n");
-      else if (line.includes("Published At:")) processedContent.push(line + "\n");
-      else if (line.includes("Processing Style:")) processedContent.push(line + "\n\n");
-      else if (line.includes("----------------")) processedContent.push(line + "\n");
-      else if (line.includes("Summary:")) processedContent.push("\n## Summary\n");
+      } else if (line.includes("ID:")) processedContent.push(line + "\n");
+      else if (line.includes("Channel Name:"))
+        processedContent.push(line + "\n");
+      else if (line.includes("Published At:"))
+        processedContent.push(line + "\n");
+      else if (line.includes("Processing Style:"))
+        processedContent.push(line + "\n\n");
+      else if (line.includes("----------------"))
+        processedContent.push(line + "\n");
+      else if (line.includes("Summary:"))
+        processedContent.push("\n## Summary\n");
       else if (line.includes("Tags:")) processedContent.push("\n## Tags\n");
-      else if (line.includes("Key Points:")) processedContent.push("\n## Key Points\n");
-      else if (line.includes("Formatted Text:")) processedContent.push("\n## Formatted Text\n");
-      else if (line.includes("================")) processedContent.push("\n" + line + "\n\n");
+      else if (line.includes("Key Points:"))
+        processedContent.push("\n## Key Points\n");
+      else if (line.includes("Formatted Text:"))
+        processedContent.push("\n## Formatted Text\n");
+      else if (line.includes("================"))
+        processedContent.push("\n" + line + "\n\n");
       else processedContent.push(line + "\n");
     }
 
     return processedContent.join("");
   } catch (error: any) {
     console.error("Error processing result:", error);
-    throw new Error(`Failed to process result: ${error.message || 'Unknown error'}`);
+    throw new Error(
+      `Failed to process result: ${error.message || "Unknown error"}`,
+    );
   }
 }
 
@@ -306,7 +340,7 @@ async function processBatch(
 ): Promise<ProcessedBatch> {
   try {
     const output: string[] = batchIndex === 0 ? [...tokenInfo] : [];
-    
+
     for (const item of batch) {
       if (item.success !== false) {
         const processedContent = await processResult(item);
@@ -316,9 +350,11 @@ async function processBatch(
 
     return { content: output };
   } catch (error: any) {
-    return { 
-      content: [], 
-      error: `Error processing batch ${batchIndex}: ${error.message || 'Unknown error'}` 
+    return {
+      content: [],
+      error: `Error processing batch ${batchIndex}: ${
+        error.message || "Unknown error"
+      }`,
     };
   }
 }
@@ -337,17 +373,30 @@ export async function write(config: Config) {
     "# Token Usage and Cost Summary\n",
     `Total Prompt Tokens: ${totalPromptTokens.toLocaleString()}`,
     `Total Completion Tokens: ${totalCompletionTokens.toLocaleString()}`,
-    `Total Tokens: ${(totalPromptTokens + totalCompletionTokens).toLocaleString()}\n`,
+    `Total Tokens: ${(
+      totalPromptTokens + totalCompletionTokens
+    ).toLocaleString()}\n`,
     `Estimated Cost:`,
-    `- Input Cost: $${((totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3)).toFixed(4)}`,
-    `- Output Cost: $${((totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.6)).toFixed(4)}`,
-    `- Total Cost: $${((totalPromptTokens / 1000000) * (config.openai?.costPerInputToken || 0.3) + (totalCompletionTokens / 1000000) * (config.openai?.costPerOutputToken || 0.6)).toFixed(4)}\n`,
+    `- Input Cost: $${(
+      (totalPromptTokens / 1000000) *
+      (config.openai?.costPerInputToken || 0.3)
+    ).toFixed(4)}`,
+    `- Output Cost: $${(
+      (totalCompletionTokens / 1000000) *
+      (config.openai?.costPerOutputToken || 0.6)
+    ).toFixed(4)}`,
+    `- Total Cost: $${(
+      (totalPromptTokens / 1000000) *
+        (config.openai?.costPerInputToken || 0.3) +
+      (totalCompletionTokens / 1000000) *
+        (config.openai?.costPerOutputToken || 0.6)
+    ).toFixed(4)}\n`,
     "---\n",
   ];
 
   try {
     let currentBatch: any[] = [];
-    
+
     for (const file of jsonFiles) {
       const fileContent = await readFile(file, "utf-8");
       let results;
@@ -366,8 +415,12 @@ export async function write(config: Config) {
         currentBatch.push(result);
 
         if (currentBatch.length >= threshold) {
-          const { content, error } = await processBatch(currentBatch, batchIndex, tokenInfo);
-          
+          const { content, error } = await processBatch(
+            currentBatch,
+            batchIndex,
+            tokenInfo,
+          );
+
           if (error) {
             console.error(error);
           }
@@ -392,8 +445,12 @@ export async function write(config: Config) {
 
     // Kalan batch'i işle
     if (currentBatch.length > 0) {
-      const { content, error } = await processBatch(currentBatch, batchIndex, tokenInfo);
-      
+      const { content, error } = await processBatch(
+        currentBatch,
+        batchIndex,
+        tokenInfo,
+      );
+
       if (error) {
         console.error(error);
       }
@@ -410,7 +467,6 @@ export async function write(config: Config) {
         writtenFiles.push(outputPath);
       }
     }
-
   } catch (error) {
     console.error("Error during file processing:", error);
     throw error;

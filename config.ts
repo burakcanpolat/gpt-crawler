@@ -3,12 +3,12 @@ import { Config } from "./src/config";
 export const defaultConfig: Config = {
   url: "https://docs.anthropic.com/sitemap.xml",
   match: "https://docs.anthropic.com/en/**",
-  maxPagesToCrawl: 2, // Pratik olarak sınırsız
+  maxPagesToCrawl: 99999, // Pratik olarak sınırsız
   pagesPerFile: 99999,
   batchDelay: 2000, // 2 seconds delay between batches
-  outputFileName: "markdown_output/playwright_docs_final.md",
+  outputFileName: "markdown_output/anthropics_final.md",
   maxTokens: 2000000,
-  maxConcurrency: 1, // Limit concurrent requests
+  maxConcurrency: 8, // Limit concurrent requests
   openai: {
     enabled: true,
     model: "gpt-4o-mini",
